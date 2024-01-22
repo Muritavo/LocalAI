@@ -1,6 +1,7 @@
 package api_config
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/go-skynet/LocalAI/pkg/downloader"
 	"github.com/go-skynet/LocalAI/pkg/utils"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
@@ -51,6 +53,17 @@ type Config struct {
 	// CUDA
 	// Explicitly enable CUDA or not (some backends might need it)
 	CUDA bool `yaml:"cuda"`
+
+	DownloadFiles []File `yaml:"download_files"`
+
+	Description string `yaml:"description"`
+	Usage       string `yaml:"usage"`
+}
+
+type File struct {
+	Filename string `yaml:"filename" json:"filename"`
+	SHA256   string `yaml:"sha256" json:"sha256"`
+	URI      string `yaml:"uri" json:"uri"`
 }
 
 type VallE struct {
@@ -102,16 +115,18 @@ type LLMConfig struct {
 	StopWords       []string `yaml:"stopwords"`
 	Cutstrings      []string `yaml:"cutstrings"`
 	TrimSpace       []string `yaml:"trimspace"`
-	ContextSize     int      `yaml:"context_size"`
-	NUMA            bool     `yaml:"numa"`
-	LoraAdapter     string   `yaml:"lora_adapter"`
-	LoraBase        string   `yaml:"lora_base"`
-	LoraScale       float32  `yaml:"lora_scale"`
-	NoMulMatQ       bool     `yaml:"no_mulmatq"`
-	DraftModel      string   `yaml:"draft_model"`
-	NDraft          int32    `yaml:"n_draft"`
-	Quantization    string   `yaml:"quantization"`
-	MMProj          string   `yaml:"mmproj"`
+	TrimSuffix      []string `yaml:"trimsuffix"`
+
+	ContextSize  int     `yaml:"context_size"`
+	NUMA         bool    `yaml:"numa"`
+	LoraAdapter  string  `yaml:"lora_adapter"`
+	LoraBase     string  `yaml:"lora_base"`
+	LoraScale    float32 `yaml:"lora_scale"`
+	NoMulMatQ    bool    `yaml:"no_mulmatq"`
+	DraftModel   string  `yaml:"draft_model"`
+	NDraft       int32   `yaml:"n_draft"`
+	Quantization string  `yaml:"quantization"`
+	MMProj       string  `yaml:"mmproj"`
 
 	RopeScaling    string  `yaml:"rope_scaling"`
 	YarnExtFactor  float32 `yaml:"yarn_ext_factor"`
@@ -266,22 +281,44 @@ func (cm *ConfigLoader) ListConfigs() []string {
 	return res
 }
 
+// Preload prepare models if they are not local but url or huggingface repositories
 func (cm *ConfigLoader) Preload(modelPath string) error {
 	cm.Lock()
 	defer cm.Unlock()
 
+	status := func(fileName, current, total string, percent float64) {
+		utils.DisplayDownloadFunction(fileName, current, total, percent)
+	}
+
+	log.Info().Msgf("Preloading models from %s", modelPath)
+
 	for i, config := range cm.configs {
+
+		// Download files and verify their SHA
+		for _, file := range config.DownloadFiles {
+			log.Debug().Msgf("Checking %q exists and matches SHA", file.Filename)
+
+			if err := utils.VerifyPath(file.Filename, modelPath); err != nil {
+				return err
+			}
+			// Create file path
+			filePath := filepath.Join(modelPath, file.Filename)
+
+			if err := downloader.DownloadFile(file.URI, filePath, file.SHA256, status); err != nil {
+				return err
+			}
+		}
+
 		modelURL := config.PredictionOptions.Model
-		modelURL = utils.ConvertURL(modelURL)
-		if strings.HasPrefix(modelURL, "http://") || strings.HasPrefix(modelURL, "https://") {
+		modelURL = downloader.ConvertURL(modelURL)
+
+		if downloader.LooksLikeURL(modelURL) {
 			// md5 of model name
 			md5Name := utils.MD5(modelURL)
 
 			// check if file exists
-			if _, err := os.Stat(filepath.Join(modelPath, md5Name)); err == os.ErrNotExist {
-				err := utils.DownloadFile(modelURL, filepath.Join(modelPath, md5Name), "", func(fileName, current, total string, percent float64) {
-					log.Info().Msgf("Downloading %s: %s/%s (%.2f%%)", fileName, current, total, percent)
-				})
+			if _, err := os.Stat(filepath.Join(modelPath, md5Name)); errors.Is(err, os.ErrNotExist) {
+				err := downloader.DownloadFile(modelURL, filepath.Join(modelPath, md5Name), "", status)
 				if err != nil {
 					return err
 				}
@@ -291,6 +328,15 @@ func (cm *ConfigLoader) Preload(modelPath string) error {
 			c := &cc
 			c.PredictionOptions.Model = md5Name
 			cm.configs[i] = *c
+		}
+		if cm.configs[i].Name != "" {
+			log.Info().Msgf("Model name: %s", cm.configs[i].Name)
+		}
+		if cm.configs[i].Description != "" {
+			log.Info().Msgf("Model description: %s", cm.configs[i].Description)
+		}
+		if cm.configs[i].Usage != "" {
+			log.Info().Msgf("Model usage: \n%s", cm.configs[i].Usage)
 		}
 	}
 	return nil
