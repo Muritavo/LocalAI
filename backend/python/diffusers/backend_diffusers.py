@@ -234,6 +234,7 @@ class BackendServicer(backend_pb2_grpc.BackendServicer):
                 self.clip_skip = request.CLIPSkip
             else:
                 self.clip_skip = 0
+            self.pipe.to("mps")
             
             # torch_dtype needs to be customized. float16 for GPU, float32 for CPU
             # TODO: this needs to be customized

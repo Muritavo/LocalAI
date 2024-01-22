@@ -84,7 +84,6 @@ class BackendServicer(backend_pb2_grpc.BackendServicer):
         except Exception as err:
             print(err)
             return backend_pb2.Result(success=False, message=f"Unexpected {err=}, {type(err)=}")
-        print("Funciona?")
         return backend_pb2.Result(message="Model loaded successfully", success=True)
 
 
@@ -106,9 +105,7 @@ class BackendServicer(backend_pb2_grpc.BackendServicer):
                 mx.eval(tokens)
                 s = self.tokenizer.decode([t.item() for t in tokens])
 
-        print("O")
         mx.eval(tokens)
-        print("X")
         s = self.tokenizer.decode([t.item() for t in tokens])
 
         return backend_pb2.Result(message=bytes(s, encoding='utf-8'))
