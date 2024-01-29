@@ -15,8 +15,8 @@ import backend_pb2_grpc
 
 import grpc
 import torch
-
-from transformers import AutoTokenizer, AutoModel
+import torch.cuda
+from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM, set_seed
 
 _ONE_DAY_IN_SECONDS = 60 * 60 * 24
 
@@ -68,16 +68,19 @@ class BackendServicer(backend_pb2_grpc.BackendServicer):
         """
         model_name = request.Model
         try:
-            self.model = AutoModel.from_pretrained(model_name, trust_remote_code=True) # trust_remote_code is needed to use the encode method with embeddings models like jinai-v2
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            if request.Type == "AutoModelForCausalLM":
+                self.model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)
+            else:
+                self.model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
 
-            if request.CUDA:
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.CUDA = False
+
+            if request.CUDA or torch.cuda.is_available():
                 try:
-                    # TODO: also tensorflow, make configurable
-                    import torch.cuda
-                    if torch.cuda.is_available():
-                        print("Loading model", model_name, "to CUDA.", file=sys.stderr)
-                        self.model = self.model.to("cuda")
+                    print("Loading model", model_name, "to CUDA.", file=sys.stderr)
+                    self.model = self.model.to("cuda")
+                    self.CUDA = True
                 except Exception as err:
                     print("Not using CUDA:", err, file=sys.stderr)
         except Exception as err:
@@ -98,6 +101,7 @@ class BackendServicer(backend_pb2_grpc.BackendServicer):
             An EmbeddingResult object that contains the calculated embeddings.
         """
 
+        set_seed(request.Seed)
         # Tokenize input
         max_length = 512
         if request.Tokens != 0:
@@ -112,6 +116,51 @@ class BackendServicer(backend_pb2_grpc.BackendServicer):
         print("Calculated embeddings for: " + request.Embeddings, file=sys.stderr)
         print("Embeddings:", sentence_embeddings, file=sys.stderr)
         return backend_pb2.EmbeddingResult(embeddings=sentence_embeddings)
+
+    def Predict(self, request, context):
+        """
+        Generates text based on the given prompt and sampling parameters.
+
+        Args:
+            request: The predict request.
+            context: The gRPC context.
+
+        Returns:
+            backend_pb2.Reply: The predict result.
+        """
+        set_seed(request.Seed)
+        if request.TopP == 0:
+            request.TopP = 0.9
+
+        max_tokens = 200
+        if request.Tokens > 0:
+            max_tokens = request.Tokens
+
+        inputs = self.tokenizer(request.Prompt, return_tensors="pt").input_ids
+        if self.CUDA:
+            inputs = inputs.to("cuda")
+
+        outputs = self.model.generate(inputs,max_new_tokens=max_tokens, temperature=request.Temperature, top_p=request.TopP)
+
+        generated_text = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
+        # Remove prompt from response if present
+        if request.Prompt in generated_text:
+            generated_text = generated_text.replace(request.Prompt, "")
+
+        return backend_pb2.Reply(message=bytes(generated_text, encoding='utf-8'))
+
+    def PredictStream(self, request, context):
+        """
+        Generates text based on the given prompt and sampling parameters, and streams the results.
+
+        Args:
+            request: The predict stream request.
+            context: The gRPC context.
+
+        Returns:
+            backend_pb2.Result: The predict stream result.
+        """
+        yield self.Predict(request, context)
 
 
 def serve(address):

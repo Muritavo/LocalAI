@@ -37,7 +37,7 @@ func Startup(opts ...options.AppOption) (*options.Option, *config.ConfigLoader, 
 	log.Info().Msgf("Starting LocalAI using %d threads, with models path: %s", options.Threads, options.Loader.ModelPath)
 	log.Info().Msgf("LocalAI version: %s", internal.PrintableVersion())
 
-	startup.PreloadModelsConfigurations(options.Loader.ModelPath, options.ModelsURL...)
+	startup.PreloadModelsConfigurations(options.ModelLibraryURL, options.Loader.ModelPath, options.ModelsURL...)
 
 	cl := config.NewConfigLoader()
 	if err := cl.LoadConfigs(options.Loader.ModelPath); err != nil {
@@ -215,6 +215,11 @@ func App(opts ...options.AppOption) (*fiber.App, error) {
 			Version string `json:"version"`
 		}{Version: internal.PrintableVersion()})
 	})
+
+	// Make sure directories exists
+	os.MkdirAll(options.ImageDir, 0755)
+	os.MkdirAll(options.AudioDir, 0755)
+	os.MkdirAll(options.Loader.ModelPath, 0755)
 
 	modelGalleryService := localai.CreateModelGalleryService(options.Galleries, options.Loader.ModelPath, galleryService)
 	app.Post("/models/apply", auth, modelGalleryService.ApplyModelGalleryEndpoint())

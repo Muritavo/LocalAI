@@ -1,11 +1,14 @@
 name: tinyllama-chat
-mmap: true
+backend: transformers
+type: AutoModelForCausalLM
+
 parameters:
-  model: huggingface://TheBloke/TinyLlama-1.1B-Chat-v0.3-GGUF/tinyllama-1.1b-chat-v0.3.Q8_0.gguf
+  model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
   temperature: 0.2
   top_k: 40
-  seed: -1
   top_p: 0.95
+  max_tokens: 4096
+
 template:
   chat_message: |
     <|im_start|>{{if eq .RoleName "assistant"}}assistant{{else if eq .RoleName "system"}}system{{else if eq .RoleName "user"}}user{{end}}
@@ -16,14 +19,13 @@ template:
     
   completion: |
     {{.Input}}
-context_size: 4096
-f16: true
+
 stopwords:
 - <|im_end|>
-gpu_layers: 90
 
 usage: |
       curl http://localhost:8080/v1/chat/completions -H "Content-Type: application/json" -d '{
-          "model": "tinyllama-chat",
-          "messages": [{"role": "user", "content": "How are you doing?", "temperature": 0.1}]
+        "model": "tinyllama-chat",
+        "messages": [{"role": "user", "content": "Say this is a test!"}],
+        "temperature": 0.7
       }'
